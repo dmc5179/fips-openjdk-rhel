@@ -1,7 +1,7 @@
 ---
 # tasks file for fips-openjdk-rhel
 
-- name: install required packages (RPM)
+- name: Install required packages (RPM)
   package:
     name:
       - java-11-openjdk-devel
@@ -20,7 +20,7 @@
   poll: 0
   when: fips_enabled.stdout == 'false'
 
-- name: wait for nodes to finish rebooting
+- name: Wait for nodes to finish rebooting
   local_action:
     module: wait_for
       host={{ inventory_hostname }}
@@ -29,10 +29,14 @@
       timeout=900
   when: fips_enabled.stdout == 'false'
 
-- name: determine JRE home directory from the java properties
+- name: Determine JRE home directory from the java properties
   shell: java -XshowSettings:properties -version |& grep java.home | awk '{print $NF}'
   register: jre_home
   
+- name: Determine SEC_CONF
+  shell: find -L {{ lookup('env', 'JRE_HOME') }} -type f -name java.security
+  register: sec_conf
+
 - name: abort if java system property overrides are disabled
   shell: |
     SEC_CONF=$(find -L {{ lookup('env', 'JRE_HOME') }} -type f -name java.security)
@@ -87,7 +91,6 @@ certutil -K -d $NSSDB -h all -f $PASSFILE
     path: WORKDIR/password.internal
     state: absent
 
-
 # modify the fips.provider.1 configuration from the java.security file
 - name: Check FIPS provider
   shell: grep 'fips.provider.1=' $SEC_CONF | sed 's/^\(..*SunPKCS11\)..*/\1 \${user.home}\/nss.fips.cfg/g'
@@ -103,8 +106,11 @@ cp $(dirname $SEC_CONF)/nss.fips.cfg $HOME
 ESCHOME=$(echo $HOME | sed 's/\//\\\//g')
 sed -i 's/\/etc\/pki\/nssdb/'$ESCHOME'\/nssdb/g' $HOME/nss.fips.cfg
 
-echo
-echo "$HOME/nss.fips.cfg and $HOME/nssdb contain the"
-echo "NSS FIPS configuration for Java and the NSS database, respectively."
-echo
+- name: Results
+  debug:
+    msg:
+    - ''
+    - "$HOME/nss.fips.cfg and $HOME/nssdb contain the"
+    - "NSS FIPS configuration for Java and the NSS database, respectively."
+    - ''
 
