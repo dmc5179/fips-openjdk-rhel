@@ -6,5 +6,3 @@ NSS_DEFAULT_DB_TYPE: "dbm"
 
 NSS_DB_PASSWD: 'admin1jboss!'
 NSSDB: $HOME/nssdb
-
-
