@@ -30,27 +30,29 @@
   when: fips_enabled.stdout == 'false'
 
 - name: Determine JRE home directory from the java properties
-  shell: java -XshowSettings:properties -version |& grep java.home | awk '{print $NF}'
+  shell: java -XshowSettings:properties -version | grep java.home | awk '{print $NF}'
   register: jre_home
   
 - name: Determine SEC_CONF
-  shell: find -L {{ lookup('env', 'JRE_HOME') }} -type f -name java.security
+  find:
+    path: "{{ lookup('env', 'JRE_HOME') }}"
+    recurse: yes
+    use_regex: no
+    patterns: 'java.security'
   register: sec_conf
 
-- name: abort if java system property overrides are disabled
-  shell: |
-    SEC_CONF=$(find -L {{ lookup('env', 'JRE_HOME') }} -type f -name java.security)
-    if [[ -z "$(grep 'security.overridePropertiesFile=true' $SEC_CONF)" ]]
-    then
-        echo
-        echo "Make sure that OpenJDK allows system property overrides."
-        echo "Edit $SEC_CONF"
-        echo "and set 'security.overridePropertiesFile=true'."
-        echo
-        exit 1
-    fi
+# Make sure that OpenJDK allows system property overrides.
+# Edit $SEC_CONF
+# and set 'security.overridePropertiesFile=true'.
+- name: Abort if java system property overrides are disabled
+  lineinfile: 
+    dest: "{{ sec_conf.stdout }}"
+    line: "security.overridePropertiesFile=true"
+  check_mode: yes
+  register: presence
+  failed_when: presence.changed
 
-#WORKDIR=$(pushd $(dirname $0) &> /dev/null && pwd && popd &> /dev/null)
+# WORKDIR=$(pushd $(dirname $0) &> /dev/null && pwd && popd &> /dev/null)
 
 - name: Create password file for the NSS database
   template:
