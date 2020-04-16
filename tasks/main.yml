@@ -113,4 +113,3 @@ sed -i 's/\/etc\/pki\/nssdb/'$ESCHOME'\/nssdb/g' $HOME/nss.fips.cfg
     - "$HOME/nss.fips.cfg and $HOME/nssdb contain the"
     - "NSS FIPS configuration for Java and the NSS database, respectively."
     - ''
-
