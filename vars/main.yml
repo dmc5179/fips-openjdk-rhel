@@ -2,7 +2,10 @@
 # vars file for fips-openjdk-rhel
 
 # set default NSS database type to use legacy for Java compatibility
-NSS_DEFAULT_DB_TYPE: "dbm"
+nss_default_db_type: "dbm"
 
-NSS_DB_PASSWD: 'admin1jboss!'
-NSSDB: $HOME/nssdb
+nss_db_passwd: 'admin1jboss!'
+systemd_nssdb: '/etc/pki/nssdb'
+nssdb_user: root
+user_nssdb: '.pki/nssdb'
+reset_nssdb: false

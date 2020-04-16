@@ -57,35 +57,57 @@
 - name: Create password file for the NSS database
   template:
     src: password.internal.j2
-    dest: WORKDIR/password.internal
+    dest: /tmp/password.internal
 
 # initialize the NSS database
 - name: Clear the NSS database
+  become: true
+  become_user: "{{ nssdb_user }}"
   file:
-    path: "{{ NSSDB }}"
+    path: "/home/{{ nssdb_user }}/{{ user_nssdb }}"
     state: absent
+  when: ( reset_nssdb | bool)
 
 - name: Create the NSS database directory
+  become: true
+  become_user: "{{ nssdb_user }}"
   file:
-    path: "{{ NSSDB }}"
+    path: "{{ ansible_env.HOME }}/{{ user_nssdb }}"
     state: present
 
-certutil -N -d $NSSDB -f $PASSFILE
+# certutil -N -d $NSSDB -f $PASSFILE
+- name: Initialize db in users ~{{ nssdb_user }}/.pki/nssdb
+  become: true
+  become_user: '{{ nssdb_user }}'
+  command: certutil -N -d sql:/home/{{ nssdb_user }}/.pki/nssdb -f /tmp/password.internal
+  when: nssdb_folder_created_user.changed
 
-# add the root CA
-certutil -A -d $NSSDB -a -n rootca \
-  -i $WORKDIR/certs/ca.cert.pem -t CT,C,C -f $PASSFILE
+- name: Add the root CA
+  become: true
+  become_user: '{{ nssdb_user }}'
+  command: certutil -A -d $NSSDB -a -n rootca \
+           -i $WORKDIR/certs/ca.cert.pem -t CT,C,C -f $PASSFILE
 
-# add the intermediate CA
-certutil -A -d $NSSDB -a -n subrootca \
-  -i $WORKDIR/certs/intermediate.cert.pem -t CT,C,C -f $PASSFILE
+- name: Add the intermediate CA
+  become: true
+  become_user: '{{ nssdb_user }}'
+  command: certutil -A -d $NSSDB -a -n subrootca \
+           -i $WORKDIR/certs/intermediate.cert.pem -t CT,C,C -f $PASSFILE
 
-# import the server cert and key
-pk12util -i certs/server.p12 -d $NSSDB -k $PASSFILE -w $PASSFILE
+- name: Import the server cert and key
+  become: true
+  become_user: '{{ nssdb_user }}'
+  command: pk12util -i certs/server.p12 -d $NSSDB -k $PASSFILE -w $PASSFILE
 
-# list all the certs and keys
-certutil -L -d $NSSDB -h all
-certutil -K -d $NSSDB -h all -f $PASSFILE
+- name: List all the certs and keys
+  become: true
+  become_user: '{{ nssdb_user }}'
+  command: certutil -L -d $NSSDB -h all
+
+- name: List all the certs and keys (cont.)
+  become: true
+  become_user: '{{ nssdb_user }}'
+  command: certutil -K -d $NSSDB -h all -f $PASSFILE
 
 # clean up the password file
 - name: Clean up the password file
