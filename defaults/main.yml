@@ -1,2 +1,4 @@
 ---
 # defaults file for fips-openjdk-rhel
+
+working_dir: '/tmp/fips_jdk'

@@ -10,130 +10,141 @@
 #  when:
 #    (ansible_distribution == 'RedHat')
 
-- name: Enable FIPS mode
-  shell: fips-mode-setup --check
-  register: fips_enabled
-
-- name: Reboot nodes to activate FIPS mode
-  shell: sleep 2 && shutdown -r now "FIPS mode enabled, rebooting"
-  async: 1
-  poll: 0
-  when: fips_enabled.stdout == 'false'
-
-- name: Wait for nodes to finish rebooting
-  local_action:
-    module: wait_for
-      host={{ inventory_hostname }}
-      port=22
-      delay=1
-      timeout=900
-  when: fips_enabled.stdout == 'false'
-
-- name: Determine JRE home directory from the java properties
-  shell: java -XshowSettings:properties -version | grep java.home | awk '{print $NF}'
-  register: jre_home
-  
-- name: Determine SEC_CONF
+- name: Find the java security file
   find:
-    path: "{{ lookup('env', 'JRE_HOME') }}"
-    recurse: yes
-    use_regex: no
+    paths: '/etc/java/java-11-openjdk'
+    recurse: true
     patterns: 'java.security'
-  register: sec_conf
+  register: sec_config
+
+# TODO: This check is not working correctly
+#- name: Get the security.overridePropertiesFile value
+#  set_fact:
+#    override_prop: "{{ lookup('ini', 'security.overridePropertiesFile type=properties filename=/etc/java/java-11-openjdk/java-11-openjdk-11.0.9.11-0.el8_2.x86_64/conf/security/java.security') }}"
+#
+#- name: Show sec
+#  debug:
+#    var: override_prop
+
+#- name: Enable FIPS mode
+#  shell: fips-mode-setup --check
+#  register: fips_enabled
+
+#- name: Reboot nodes to activate FIPS mode
+#  shell: sleep 2 && shutdown -r now "FIPS mode enabled, rebooting"
+#  async: 1
+#  poll: 0
+#  when: fips_enabled.stdout == 'false'
+
+#- name: Wait for nodes to finish rebooting
+#  local_action:
+#    module: wait_for
+#      host={{ inventory_hostname }}
+#      port=22
+#      delay=1
+#      timeout=900
+#  when: fips_enabled.stdout == 'false'
+
+#- name: Determine JRE home directory from the java properties
+#  shell: java -XshowSettings:properties -version | grep java.home | awk '{print $NF}'
+#  register: jre_home
+  
+#- name: Determine SEC_CONF
+#  find:
+#    path: "{{ lookup('env', 'JRE_HOME') }}"
+#    recurse: yes
+#    use_regex: no
+#    patterns: 'java.security'
+#  register: sec_conf
 
 # Make sure that OpenJDK allows system property overrides.
 # Edit $SEC_CONF
 # and set 'security.overridePropertiesFile=true'.
-- name: Abort if java system property overrides are disabled
-  lineinfile: 
-    dest: "{{ sec_conf.stdout }}"
-    line: "security.overridePropertiesFile=true"
-  check_mode: yes
-  register: presence
-  failed_when: presence.changed
+#- name: Abort if java system property overrides are disabled
+#  lineinfile: 
+#    dest: "{{ sec_conf.stdout }}"
+#    line: "security.overridePropertiesFile=true"
+#  check_mode: yes
+#  register: presence
+#  failed_when: presence.changed
 
-# WORKDIR=$(pushd $(dirname $0) &> /dev/null && pwd && popd &> /dev/null)
+- name: Remove existing working dir
+  file:
+    path: '{{ working_dir }}'
+    state: absent
+
+- name: Create working dir
+  file:
+    path: '{{ working_dir }}/certs'
+    state: directory
+
+- name: Copy certificate files
+  copy:
+    src: '{{ item }}'
+    dest: '{{ working_dir }}/certs/{{ item }}'
+  with_fileglob:
+    - 'files/*.pem'
+    - 'files/*.p12'
 
 - name: Create password file for the NSS database
   template:
     src: password.internal.j2
-    dest: /tmp/password.internal
+    dest: '{{ working_dir }}/password.internal'
 
-# initialize the NSS database
+  # TODO: Do we really want to do this?
 - name: Clear the NSS database
-  become: true
-  become_user: "{{ nssdb_user }}"
   file:
-    path: "/home/{{ nssdb_user }}/{{ user_nssdb }}"
+    path: '{{ ansible_env.HOME }}/nssdb'
     state: absent
-  when: ( reset_nssdb | bool)
 
-- name: Create the NSS database directory
-  become: true
-  become_user: "{{ nssdb_user }}"
+- name: Create the NSS database
   file:
-    path: "{{ ansible_env.HOME }}/{{ user_nssdb }}"
+    path: '{{ ansible_env.HOME }}/nssdb'
     state: present
 
-# certutil -N -d $NSSDB -f $PASSFILE
-- name: Initialize db in users ~{{ nssdb_user }}/.pki/nssdb
-  become: true
-  become_user: '{{ nssdb_user }}'
-  command: certutil -N -d sql:/home/{{ nssdb_user }}/.pki/nssdb -f /tmp/password.internal
-  when: nssdb_folder_created_user.changed
+- name: Initialize nssdb
+  shell: certutil -N -d sql:{{ ansible_env.HOME }}/nssdb -f {{ working_dir }}/password.internal
 
 - name: Add the root CA
-  become: true
-  become_user: '{{ nssdb_user }}'
-  command: certutil -A -d $NSSDB -a -n rootca \
-           -i $WORKDIR/certs/ca.cert.pem -t CT,C,C -f $PASSFILE
+  shell: certutil -A -d sql:{{ ansible_env.HOME }}/nssdb -a -n rootca -i {{ working_dir }}/certs/ca.cert.pem -t CT,C,C -f {{ working_dir }}/password.internal
 
 - name: Add the intermediate CA
-  become: true
-  become_user: '{{ nssdb_user }}'
-  command: certutil -A -d $NSSDB -a -n subrootca \
-           -i $WORKDIR/certs/intermediate.cert.pem -t CT,C,C -f $PASSFILE
+  shell: certutil -A -d sql:{{ ansible_env.HOME }}/nssdb -a -n subrootca -i {{ working_dir }}/certs/intermediate.cert.pem -t CT,C,C -f {{ working_dir }}/password.internal
 
 - name: Import the server cert and key
-  become: true
-  become_user: '{{ nssdb_user }}'
-  command: pk12util -i certs/server.p12 -d $NSSDB -k $PASSFILE -w $PASSFILE
+  shell: pk12util -i certs/server.p12 -d sql:{{ ansible_env.HOME }}/nssdb -k {{ working_dir }}/password.internal -w {{ working_dir }}/password.internal
 
 - name: List all the certs and keys
-  become: true
-  become_user: '{{ nssdb_user }}'
-  command: certutil -L -d $NSSDB -h all
+  shell: certutil -L -d sql:{{ ansible_env.HOME }}/nssdb -h all
 
 - name: List all the certs and keys (cont.)
-  become: true
-  become_user: '{{ nssdb_user }}'
-  command: certutil -K -d $NSSDB -h all -f $PASSFILE
+  shell: certutil -K -d sql:{{ ansible_env.HOME }}/nssdb -h all -f {{ working_dir }}/password.internal
 
-# clean up the password file
+ clean up the password file
 - name: Clean up the password file
   file:
-    path: WORKDIR/password.internal
+    path: '{{ working_dir }}/password.internal'
     state: absent
 
 # modify the fips.provider.1 configuration from the java.security file
-- name: Check FIPS provider
-  shell: grep 'fips.provider.1=' $SEC_CONF | sed 's/^\(..*SunPKCS11\)..*/\1 \${user.home}\/nss.fips.cfg/g'
-  register: fips_provider
+#- name: Check FIPS provider
+#  shell: grep 'fips.provider.1=' $SEC_CONF | sed 's/^\(..*SunPKCS11\)..*/\1 \${user.home}\/nss.fips.cfg/g'
+#  register: fips_provider
 
-- name: Create security property override file for the local user
-  template:
-    src: java.security.properties.j2
-    dest: $HOME/java.security.properties
+#- name: Create security property override file for the local user
+#  template:
+#    src: java.security.properties.j2
+#    dest: $HOME/java.security.properties
 
 # point local user NSS config to the user's NSS database
-cp $(dirname $SEC_CONF)/nss.fips.cfg $HOME
-ESCHOME=$(echo $HOME | sed 's/\//\\\//g')
-sed -i 's/\/etc\/pki\/nssdb/'$ESCHOME'\/nssdb/g' $HOME/nss.fips.cfg
+#cp $(dirname $SEC_CONF)/nss.fips.cfg $HOME
+#ESCHOME=$(echo $HOME | sed 's/\//\\\//g')
+#sed -i 's/\/etc\/pki\/nssdb/'$ESCHOME'\/nssdb/g' $HOME/nss.fips.cfg
 
-- name: Results
-  debug:
-    msg:
-    - ''
-    - "$HOME/nss.fips.cfg and $HOME/nssdb contain the"
-    - "NSS FIPS configuration for Java and the NSS database, respectively."
-    - ''
+#- name: Results
+#  debug:
+#    msg:
+#    - ''
+#    - "$HOME/nss.fips.cfg and $HOME/nssdb contain the"
+#    - "NSS FIPS configuration for Java and the NSS database, respectively."
+#    - ''
